@@ -888,6 +888,16 @@
           ]
         },
         {
+          "key": "ui.sidebar_position",
+          "type": "enum",
+          "default": "left",
+          "description": "Which side of the screen the sidebar occupies.",
+          "values": [
+            "left",
+            "right"
+          ]
+        },
+        {
           "key": "ui.mobile_width_threshold",
           "type": "integer",
           "default": "64",

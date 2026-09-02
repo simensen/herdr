@@ -197,6 +197,88 @@ fn client_owned_sidebar_dividers_resize_live() {
 }
 
 #[test]
+fn right_sidebar_hits_sit_on_inner_edge_and_drag_grows_toward_center() {
+    const COLS: u16 = 120;
+    let mut config = Config::default();
+    config.ui.sidebar_position = SidebarPositionConfig::Right;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(COLS, 30).expect("expanded right sidebar");
+
+    let sidebar = state.layout(COLS, 30).sidebar;
+    assert_eq!(sidebar.right(), COLS, "sidebar is pinned to the right edge");
+    let width_divider = state.hits.sidebar_divider;
+    assert_eq!(width_divider.x, sidebar.x, "divider sits on the inner edge");
+    assert_eq!(
+        state.hits.sidebar_toggle.x,
+        sidebar.x + 1,
+        "toggle sits just inside the divider"
+    );
+    assert!(
+        state.hits.sidebar_section_divider.x > sidebar.x,
+        "section divider starts right of the separator column"
+    );
+    assert!(state.hits.workspace_body.x > sidebar.x);
+
+    // Dragging the divider toward the screen center grows the sidebar and the
+    // right edge stays pinned.
+    let initial_width = state.sidebar_width;
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: width_divider.x,
+        row: width_divider.y + 2,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    let target = width_divider.x - 4;
+    let resize =
+        state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: target,
+            row: width_divider.y + 2,
+            modifiers: KeyModifiers::empty(),
+        })]);
+    assert_eq!(state.sidebar_width, initial_width + 4);
+    assert_eq!(state.sidebar_width, COLS - target);
+    assert!(state.sidebar_width_manual);
+    assert!(resize.repaint);
+    assert!(resize.resize);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: target,
+        row: width_divider.y + 2,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.set_pane_surface(surface());
+    state.compose(COLS, 30).expect("resized right sidebar");
+    let resized = state.layout(COLS, 30).sidebar;
+    assert_eq!(resized.right(), COLS, "right edge must stay pinned");
+    assert_eq!(resized.x, target);
+
+    // The toggle collapses the sidebar; the collapsed rail stays on the right.
+    let toggle = state.hits.sidebar_toggle;
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: toggle.x,
+        row: toggle.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: toggle.x,
+        row: toggle.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(state.sidebar_collapsed);
+    state.set_pane_surface(surface());
+    let frame = state.compose(COLS, 30).expect("collapsed right sidebar");
+    let collapsed = state.layout(COLS, 30).sidebar;
+    assert_eq!(collapsed, Rect::new(COLS - 4, 0, 4, 30));
+    assert!(state.hits.sidebar_toggle.x > collapsed.x);
+    let _ = frame;
+}
+
+#[test]
 fn context_menus_capture_stable_targets_and_route_actions() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));

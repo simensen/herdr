@@ -20,8 +20,9 @@ pub(super) fn render_collapsed(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    super::render::render_sidebar_background(buffer, area, palette);
-    let (workspace_area, divider_y, detail_area) = super::sidebar::collapsed_sidebar_sections(area);
+    super::render::render_sidebar_background(buffer, area, palette, config.sidebar_position);
+    let (workspace_area, divider_y, detail_area) =
+        super::sidebar::collapsed_sidebar_sections(area, config.sidebar_position);
     let mut total_rows = 0usize;
     let mut selected_row = None;
     let reveal = std::mem::take(state.reveal_navigation_workspace);
@@ -209,7 +210,7 @@ pub(super) fn render_collapsed(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "»",
+        super::sidebar::collapsed_toggle_glyph(config.sidebar_position),
         Style::default().fg(palette.overlay0),
     );
 }
@@ -223,16 +224,22 @@ pub(super) fn render_expanded(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    super::render::render_sidebar_background(buffer, area, palette);
+    let pos = config.sidebar_position;
+    super::render::render_sidebar_background(buffer, area, palette, pos);
     hits.sidebar_divider = if area.is_empty() {
         Rect::default()
     } else {
-        Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
+        Rect::new(
+            crate::ui::sidebar_separator_x(area, pos),
+            area.y,
+            1,
+            area.height,
+        )
     };
     let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split, pos);
     hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split, pos);
     put_text(
         buffer,
         workspace_area.x,
@@ -535,7 +542,7 @@ pub(super) fn render_expanded(
         hits,
     );
     hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
+        super::sidebar::expanded_toggle_x(area, pos),
         area.bottom().saturating_sub(1),
         u16::from(area.width > 1),
         u16::from(area.height > 0),
@@ -545,7 +552,7 @@ pub(super) fn render_expanded(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "«",
+        super::sidebar::expanded_toggle_glyph(pos),
         Style::default().fg(palette.overlay0),
     );
 }

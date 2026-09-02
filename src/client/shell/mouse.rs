@@ -11,7 +11,16 @@ impl ClientShellState {
             self.config.sidebar_max_width,
         )
         .unwrap_or((18, 36));
-        let width = column.saturating_add(1).clamp(min, max);
+        // A left sidebar's divider column is its last column, so the width is
+        // column + 1. A right sidebar's divider is its first column, so the
+        // width is the distance from that column to the screen's right edge.
+        let width = if self.config.sidebar_position.is_right() {
+            let cols = self.last_composed_size.map_or(0, |(cols, _)| cols);
+            cols.saturating_sub(column)
+        } else {
+            column.saturating_add(1)
+        }
+        .clamp(min, max);
         if self.sidebar_width != width {
             self.sidebar_width = width;
             self.sidebar_width_manual = true;
