@@ -26,8 +26,9 @@ pub(in crate::client::shell) fn workspace_active_background(
 
 pub(in crate::client::shell) fn collapsed_sidebar_sections(
     area: Rect,
+    pos: SidebarPositionConfig,
 ) -> (Rect, Option<u16>, Rect) {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    let content = crate::ui::sidebar_content_rect(area, pos);
     if content.is_empty() {
         return (Rect::default(), None, Rect::default());
     }
@@ -55,8 +56,9 @@ pub(crate) fn render_collapsed_sidebar(
     let palette = &config.palette;
     let selection_background = workspace_selection_background(palette);
     let active_background = workspace_active_background(palette, selected_workspace_id.is_some());
-    render_sidebar_background(buffer, area, palette);
-    let (workspace_area, divider_y, detail_area) = collapsed_sidebar_sections(area);
+    render_sidebar_background(buffer, area, palette, config.sidebar_position);
+    let (workspace_area, divider_y, detail_area) =
+        collapsed_sidebar_sections(area, config.sidebar_position);
     for (index, workspace) in snapshot
         .workspaces
         .iter()
@@ -185,7 +187,7 @@ pub(crate) fn render_collapsed_sidebar(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "»",
+        collapsed_toggle_glyph(config.sidebar_position),
         if super::super::global_menu::global_menu_attention(snapshot) {
             Style::default()
                 .fg(palette.accent)
@@ -205,16 +207,22 @@ pub(crate) fn render_sidebar(
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
-    render_sidebar_background(buffer, area, palette);
+    let pos = config.sidebar_position;
+    render_sidebar_background(buffer, area, palette, pos);
     hits.sidebar_divider = if area.is_empty() {
         Rect::default()
     } else {
-        Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
+        Rect::new(
+            crate::ui::sidebar_separator_x(area, pos),
+            area.y,
+            1,
+            area.height,
+        )
     };
     let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split, pos);
     hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split, pos);
     put_text(
         buffer,
         workspace_area.x,
@@ -440,7 +448,7 @@ pub(crate) fn render_sidebar(
     );
 
     hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
+        expanded_toggle_x(area, pos),
         area.bottom().saturating_sub(1),
         u16::from(area.width > 1),
         u16::from(area.height > 0),
@@ -450,9 +458,36 @@ pub(crate) fn render_sidebar(
         hits.sidebar_toggle.x,
         hits.sidebar_toggle.y,
         hits.sidebar_toggle.width,
-        "«",
+        expanded_toggle_glyph(pos),
         Style::default().fg(palette.overlay0),
     );
+}
+
+/// The expanded toggle glyph sits just inside the separator column.
+pub(crate) fn expanded_toggle_x(area: Rect, pos: SidebarPositionConfig) -> u16 {
+    if pos.is_right() {
+        area.x.saturating_add(1)
+    } else {
+        area.right().saturating_sub(2)
+    }
+}
+
+/// Chevrons point toward the edge the sidebar collapses to: a left sidebar
+/// collapses leftward, a right sidebar rightward.
+pub(crate) fn expanded_toggle_glyph(pos: SidebarPositionConfig) -> &'static str {
+    if pos.is_right() {
+        "»"
+    } else {
+        "«"
+    }
+}
+
+pub(crate) fn collapsed_toggle_glyph(pos: SidebarPositionConfig) -> &'static str {
+    if pos.is_right() {
+        "«"
+    } else {
+        "»"
+    }
 }
 
 pub(crate) fn workspace_entries(

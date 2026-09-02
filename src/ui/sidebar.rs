@@ -13,6 +13,7 @@ pub(crate) use self::tokens::{
 use super::text::{display_width, truncate_end};
 use crate::app::state::Palette;
 use crate::app::AppState;
+use crate::config::SidebarPositionConfig;
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
 
@@ -47,8 +48,34 @@ fn sidebar_section_heights(total_height: u16, split_ratio: f32) -> (u16, u16) {
     )
 }
 
-pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+/// Column holding the sidebar separator, on the edge adjacent to the main pane
+/// (right edge for a left sidebar, left edge for a right sidebar).
+pub(crate) fn sidebar_separator_x(area: Rect, pos: SidebarPositionConfig) -> u16 {
+    if pos.is_right() {
+        area.x
+    } else {
+        area.right().saturating_sub(1)
+    }
+}
+
+/// Sidebar content area, reserving one column for the separator on the inner
+/// edge. For a right sidebar the reserved column is on the left, so content
+/// shifts one column to the right; width is unchanged either way.
+pub(crate) fn sidebar_content_rect(area: Rect, pos: SidebarPositionConfig) -> Rect {
+    let x = if pos.is_right() {
+        area.x.saturating_add(1)
+    } else {
+        area.x
+    };
+    Rect::new(x, area.y, area.width.saturating_sub(1), area.height)
+}
+
+pub(crate) fn expanded_sidebar_sections(
+    area: Rect,
+    split_ratio: f32,
+    pos: SidebarPositionConfig,
+) -> (Rect, Rect) {
+    let content = sidebar_content_rect(area, pos);
     if content.is_empty() {
         return (Rect::default(), Rect::default());
     }
@@ -65,8 +92,12 @@ pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, 
     )
 }
 
-pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+pub(crate) fn sidebar_section_divider_rect(
+    area: Rect,
+    split_ratio: f32,
+    pos: SidebarPositionConfig,
+) -> Rect {
+    let content = sidebar_content_rect(area, pos);
     if content.width == 0 || content.height < 6 {
         return Rect::default();
     }
@@ -293,4 +324,45 @@ fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) 
         };
     }
     style
+}
+
+#[cfg(test)]
+mod position_tests {
+    use super::*;
+
+    #[test]
+    fn right_sidebar_reserves_separator_on_inner_edge() {
+        // A left sidebar reserves its right (screen-inner) column for the
+        // separator; a right sidebar reserves its left (main-adjacent) column,
+        // so content shifts one column right while width is unchanged.
+        let area = Rect::new(94, 0, 26, 20);
+
+        assert_eq!(sidebar_separator_x(area, SidebarPositionConfig::Left), 119);
+        assert_eq!(sidebar_separator_x(area, SidebarPositionConfig::Right), 94);
+
+        let (left_ws, left_detail) =
+            expanded_sidebar_sections(area, 0.5, SidebarPositionConfig::Left);
+        let (right_ws, right_detail) =
+            expanded_sidebar_sections(area, 0.5, SidebarPositionConfig::Right);
+        assert_eq!(left_ws.x, 94);
+        assert_eq!(right_ws.x, 95);
+        assert_eq!(left_ws.width, right_ws.width);
+        assert_eq!(left_detail.x, 94);
+        assert_eq!(right_detail.x, 95);
+
+        let left_divider = sidebar_section_divider_rect(area, 0.5, SidebarPositionConfig::Left);
+        let right_divider = sidebar_section_divider_rect(area, 0.5, SidebarPositionConfig::Right);
+        assert_eq!(left_divider.x, 94);
+        assert_eq!(right_divider.x, 95);
+        assert_eq!(left_divider.width, right_divider.width);
+    }
+
+    #[test]
+    fn expanded_sidebar_sections_handle_tiny_heights() {
+        let (ws_area, detail_area) =
+            expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9, SidebarPositionConfig::Left);
+
+        assert_eq!(ws_area, Rect::new(0, 0, 19, 3));
+        assert_eq!(detail_area, Rect::new(0, 3, 19, 2));
+    }
 }
