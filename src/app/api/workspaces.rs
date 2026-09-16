@@ -338,6 +338,8 @@ impl App {
             .collect::<Vec<_>>();
         self.state.selected = index;
         self.state.close_selected_workspace();
+        // A deliberate close must never resurrect a pane-death seed.
+        self.last_closed_workspace_identity = None;
         self.shutdown_detached_terminal_runtimes();
         for (workspace_id, workspace) in closed_workspaces {
             self.emit_event(EventEnvelope {

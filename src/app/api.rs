@@ -283,6 +283,28 @@ impl App {
             None
         };
 
+        // A shell that exits on its own in the last pane of the last
+        // workspace takes the workspace's identity with it; capture the live
+        // cwd and label before removal so ensure_default_workspace can
+        // respawn in place instead of falling back to $HOME. Deliberate
+        // closes (workspace.close, TUI keybinds) never reach this path with
+        // a live workspace, so they keep today's fresh-default behavior.
+        let dying_last_workspace_identity = if let AppEvent::PaneDied { pane_id, .. } = &ev {
+            self.find_pane(*pane_id).and_then(|(ws_idx, _)| {
+                (self.state.workspaces.len() == 1
+                    && self.state.close_pane_would_close_workspace(ws_idx, *pane_id))
+                .then(|| {
+                    let ws = &self.state.workspaces[ws_idx];
+                    let cwd = ws
+                        .resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+                        .unwrap_or_else(|| ws.identity_cwd.clone());
+                    (cwd, ws.custom_name.clone())
+                })
+            })
+        } else {
+            None
+        };
+
         let released_agent = if let AppEvent::HookAgentReleased {
             pane_id,
             known_agent,
@@ -312,6 +334,9 @@ impl App {
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
+        if dying_last_workspace_identity.is_some() && self.state.workspaces.is_empty() {
+            self.last_closed_workspace_identity = dying_last_workspace_identity;
+        }
         if update_ready.is_some() {
             self.state.latest_release_notes = crate::release_notes::load_latest();
         }
