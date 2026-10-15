@@ -885,6 +885,10 @@ pub struct AppState {
     pub(crate) host_cell_size: crate::kitty_graphics::HostCellSize,
     /// Set when a persisted session snapshot would change.
     pub session_dirty: bool,
+    /// Identity (resolved cwd, custom label) of the last workspace removed by
+    /// pane death, consumed once by `App::ensure_default_workspace`.
+    /// Deliberate closes clear it.
+    pub(crate) last_closed_workspace_identity: Option<(std::path::PathBuf, Option<String>)>,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
@@ -1119,6 +1123,7 @@ impl AppState {
             host_terminal_theme: TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
+            last_closed_workspace_identity: None,
             terminal_runtime_shutdowns: Vec::new(),
         }
     }

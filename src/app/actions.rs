@@ -672,6 +672,10 @@ impl AppState {
         if self.workspaces.is_empty() {
             return;
         }
+        // A deliberate close must never resurrect a pane-death seed. Every
+        // deliberate close path (workspace.close, tab.close, pane.close,
+        // worktree removal, TUI keybinds) ends here.
+        self.last_closed_workspace_identity = None;
         self.mark_session_dirty();
 
         let mut terminal_ids = Vec::new();

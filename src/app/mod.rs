@@ -574,6 +574,7 @@ impl App {
             host_terminal_theme: crate::terminal_theme::TerminalTheme::default(),
             host_cell_size: crate::kitty_graphics::HostCellSize::default(),
             session_dirty: false,
+            last_closed_workspace_identity: None,
             terminal_runtime_shutdowns: Vec::new(),
         };
 
@@ -764,11 +765,32 @@ impl App {
             return false;
         }
 
-        let cwd = self.resolve_new_terminal_cwd(None);
+        // Respawn with the identity of the workspace whose last pane just
+        // died. An explicit non-`follow` terminal.new_cwd policy still wins:
+        // the seed is only a follow hint, and the label travels with the cwd.
+        let seed = if matches!(
+            self.state.new_terminal_cwd,
+            crate::config::NewTerminalCwdConfig::Follow
+        ) {
+            self.state.last_closed_workspace_identity.take()
+        } else {
+            self.state.last_closed_workspace_identity = None;
+            None
+        };
+        let (seed_cwd, seed_name) = match seed {
+            Some((cwd, name)) => (Some(cwd), name),
+            None => (None, None),
+        };
+        let cwd = self.resolve_new_terminal_cwd(seed_cwd);
         let preserve_checkpoint = self.pane_exit_checkpoint_pending && !self.state.session_dirty;
 
         match self.create_workspace_with_options(cwd, true) {
-            Ok(_) => {
+            Ok(idx) => {
+                if let Some(name) = seed_name {
+                    if let Some(ws) = self.state.workspaces.get_mut(idx) {
+                        ws.set_custom_name(name);
+                    }
+                }
                 if preserve_checkpoint {
                     // Automatic replacement is part of pane removal, not a new user mutation.
                     self.pane_exit_checkpoint_pending = true;
@@ -3297,6 +3319,160 @@ mod tests {
 
         std::env::remove_var("XDG_CONFIG_HOME");
         let _ = std::fs::remove_dir_all(config_home);
+    }
+
+    #[tokio::test]
+    async fn last_pane_death_respawns_default_workspace_with_identity() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("proj");
+        workspace.set_custom_name("proj-label".to_string());
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        // The shell moved away from the create-time cwd; the respawn must
+        // follow the live cwd, not the original identity_cwd.
+        let live_cwd = unique_temp_path("respawn-identity-live-cwd");
+        std::fs::create_dir_all(&live_cwd).unwrap();
+        let terminal_id = app.state.workspaces[0].tabs[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .clone();
+        app.state.terminals.get_mut(&terminal_id).unwrap().cwd = live_cwd.clone();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
+        });
+        assert!(app.state.workspaces.is_empty());
+        assert!(app.state.last_closed_workspace_identity.is_some());
+
+        assert!(app.ensure_default_workspace());
+        let ws = &app.state.workspaces[0];
+        assert_eq!(ws.custom_name.as_deref(), Some("proj-label"));
+        assert_eq!(ws.identity_cwd, live_cwd);
+        assert!(app.state.last_closed_workspace_identity.is_none());
+
+        let _ = std::fs::remove_dir_all(live_cwd);
+    }
+
+    #[tokio::test]
+    async fn non_follow_new_cwd_policy_ignores_pane_death_identity() {
+        let mut app = test_app();
+        app.state.new_terminal_cwd = crate::config::NewTerminalCwdConfig::Home;
+        let mut workspace = Workspace::test_new("proj");
+        workspace.set_custom_name("proj-label".to_string());
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
+        });
+        assert!(app.state.workspaces.is_empty());
+
+        assert!(app.ensure_default_workspace());
+        let ws = &app.state.workspaces[0];
+        assert_eq!(ws.custom_name, None);
+        assert!(app.state.last_closed_workspace_identity.is_none());
+    }
+
+    #[tokio::test]
+    async fn pane_death_in_one_of_many_workspaces_does_not_seed_identity() {
+        let mut app = test_app();
+        let workspace_a = Workspace::test_new("keep");
+        let workspace_b = Workspace::test_new("dies");
+        let pane_id = workspace_b.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace_a, workspace_b];
+        app.state.active = Some(1);
+        app.state.ensure_test_terminals();
+
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
+        });
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert!(app.state.last_closed_workspace_identity.is_none());
+    }
+
+    #[tokio::test]
+    async fn deliberate_close_clears_pending_pane_death_identity() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("proj");
+        workspace.set_custom_name("proj-label".to_string());
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        // No shell client is attached, so the seed stays pending.
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
+        });
+        assert!(app.state.last_closed_workspace_identity.is_some());
+
+        // An API client creates a workspace and then closes it through
+        // tab.close, which is not handle_workspace_close.
+        app.state.workspaces = vec![Workspace::test_new("scratch")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let tab_id = app.public_tab_id(0, 0).unwrap();
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_tab_close".into(),
+            method: crate::api::schema::Method::TabClose(crate::api::schema::TabTarget { tab_id }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["result"]["type"], "ok", "{response}");
+        assert!(app.state.workspaces.is_empty());
+        assert!(app.state.last_closed_workspace_identity.is_none());
+
+        assert!(app.ensure_default_workspace());
+        assert_eq!(app.state.workspaces[0].custom_name, None);
+    }
+
+    #[tokio::test]
+    async fn workspace_close_clears_pending_pane_death_identity() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("proj");
+        workspace.set_custom_name("proj-label".to_string());
+        let pane_id = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+
+        // No shell client is attached, so the seed stays pending.
+        app.handle_internal_event(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Interrupted,
+        });
+        assert!(app.state.last_closed_workspace_identity.is_some());
+
+        // workspace.close calls close_workspaces directly, not
+        // close_selected_workspace.
+        app.state.workspaces = vec![Workspace::test_new("scratch")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let workspace_id = app.public_workspace_id(0);
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_workspace_close".into(),
+            method: crate::api::schema::Method::WorkspaceClose(
+                crate::api::schema::WorkspaceCloseParams {
+                    workspace_id,
+                    close_group: false,
+                },
+            ),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["result"]["type"], "ok", "{response}");
+        assert!(app.state.workspaces.is_empty());
+        assert!(app.state.last_closed_workspace_identity.is_none());
+
+        assert!(app.ensure_default_workspace());
+        assert_eq!(app.state.workspaces[0].custom_name, None);
     }
 
     #[test]
